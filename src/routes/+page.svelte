@@ -27,6 +27,24 @@
 	import { StandardWalletAdapter } from '@solana/wallet-standard-wallet-adapter-base';
 	import { ed25519 } from '@noble/curves/ed25519';
 	import bs58 from 'bs58';
+	import { generateSigner } from '@metaplex-foundation/umi';
+	import {
+		createCollection,
+		create,
+		ruleSet,
+		fetchCollection
+	} from '@metaplex-foundation/mpl-core';
+	import { customCreateUmi } from '$lib/umi';
+
+	type ProdData = {
+		name: string;
+		productName: string;
+		brand: string;
+		description: string;
+		external_url: string;
+		image: string;
+		attributes: string[];
+	};
 
 	const network = WalletAdapterNetwork.Devnet;
 	const endpoint = clusterApiUrl(network);
@@ -36,6 +54,105 @@
 	let connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'disconnecting';
 	let currentWallet: Adapter | undefined = undefined;
 	let currentPublicKey: PublicKey | undefined = undefined;
+
+	let prodKey = '';
+	let prodData: ProdData | undefined = undefined;
+	let tokenNum = '';
+	let collectionAddr = '';
+
+	async function handleTestData() {
+		const trimed = prodKey.trim();
+		if (trimed == '') {
+			console.error('missing prod key');
+			return;
+		}
+
+		const resp = await fetch(`https://member.auroriaverse.com/products/${prodKey}/1`, {
+			method: 'GET',
+			headers: {
+				'Content-Type': 'application/json'
+			}
+		});
+		const prodJsonStr = await resp.text();
+		const prodJson = JSON.parse(prodJsonStr);
+
+		console.log('product data', prodJson);
+
+		prodData = prodJson as ProdData;
+	}
+
+	async function handleCreateCollection() {
+		if (!currentWallet || connectionStatus != 'connected') {
+			console.error('No wallet connected');
+			return;
+		}
+
+		if (!currentWallet.publicKey) {
+			throw new Error('Wallet missing publickey');
+		}
+
+		if (!prodData) {
+			console.error('missing product data');
+			return;
+		}
+
+		const umi = customCreateUmi(connection, currentWallet);
+		const signer = generateSigner(umi);
+
+		const builder = createCollection(umi, {
+			collection: signer,
+			name: `${prodData.brand} ${prodData.productName}`,
+			uri: `https://member.auroriaverse.com/products/${prodKey}/info.json`,
+			plugins: [
+				{
+					type: 'VerifiedCreators',
+					signatures: [
+						{
+							address: umi.identity.publicKey,
+							verified: true
+						}
+					]
+				},
+				{
+					type: 'Royalties',
+					basisPoints: 100,
+					creators: [{ address: umi.identity.publicKey, percentage: 100 }],
+					ruleSet: ruleSet('None')
+				}
+			]
+		});
+
+		const { signature, result } = await builder.sendAndConfirm(umi);
+
+		console.log('createCollection result', signature, result);
+	}
+
+	async function handleCreateToken() {
+		if (!currentWallet || connectionStatus != 'connected') {
+			console.error('No wallet connected');
+			return;
+		}
+
+		if (!prodData) {
+			console.error('missing product data');
+			return;
+		}
+
+		const umi = customCreateUmi(connection, currentWallet);
+		const signer = generateSigner(umi);
+		const collection = await fetchCollection(umi, collectionAddr);
+
+		const builder = create(umi, {
+			asset: signer,
+			collection,
+			name: `${prodData.name}`,
+			uri: `https://member.auroriaverse.com/products/${prodKey}/${tokenNum}`
+		});
+
+		const { signature, result } = await builder.sendAndConfirm(umi);
+
+		console.log('create asset result', signature, result);
+	}
 
 	async function handleConnectWallet(evt: Event) {
 		const el = evt.target as HTMLElement;
@@ -107,7 +224,7 @@
 		console.log('Signature', sigStr);
 	}
 
-  // This will send a legacy type transaction
+	// This will send a legacy type transaction
 	async function handleSendTransaction() {
 		if (connectionStatus != 'connected' || !currentWallet || !currentPublicKey) {
 			console.error('Wallet not connected');
@@ -143,9 +260,9 @@
 		}
 	}
 
-  // Not sure what is the purpose of this. Offline signing? Hardware device?
-  // https://solana.stackexchange.com/a/548
-  async function handleSignTransaction() {
+	// Not sure what is the purpose of this. Offline signing? Hardware device?
+	// https://solana.stackexchange.com/a/548
+	async function handleSignTransaction() {
 		if (connectionStatus != 'connected' || !currentWallet || !currentPublicKey) {
 			console.error('Wallet not connected');
 			return;
@@ -170,24 +287,24 @@
 			);
 
 			const transaction2 = await signTransaction(transaction);
-      if (!transaction2.signature) {
-        console.error('Transaction was not signed');
-        return;
-      }
+			if (!transaction2.signature) {
+				console.error('Transaction was not signed');
+				return;
+			}
 
-      const sig = bs58.encode(transaction2.signature);
+			const sig = bs58.encode(transaction2.signature);
 
 			console.log('Transaction signed', sig);
 
-      if (!transaction2.verifySignatures()) {
-        console.error('Invalid transaction signature', sig);
-      } else {
-        console.log('Transaction signature is valid', sig);
-      }
+			if (!transaction2.verifySignatures()) {
+				console.error('Invalid transaction signature', sig);
+			} else {
+				console.log('Transaction signature is valid', sig);
+			}
 		} catch (err) {
 			console.error('Transaction sign failed', err);
 		}
-  }
+	}
 
 	const sendTransaction: WalletAdapterProps['sendTransaction'] = async (
 		transaction,
@@ -269,54 +386,88 @@
 			});
 
 			ad.on('error', (err) => {
-        // Somehow wallet disconnecting can trigger an error? WalletDisconnectedError
+				// Somehow wallet disconnecting can trigger an error? WalletDisconnectedError
 				console.error(ad.name, err);
 			});
 		}
 	});
 </script>
 
-<div class="flex gap-2">
-	<button
-		class="border px-2 py-1"
-		onclick={handleDisconnect}
-		disabled={connectionStatus != 'connected'}>Disconnect</button
-	>
-	<button
-		class="border px-2 py-1"
-		onclick={handleSignMessage}
-		disabled={connectionStatus != 'connected'}>Sign Msg</button
-	>
-	<button
-		class="border px-2 py-1"
-		onclick={handleSendTransaction}
-		disabled={connectionStatus != 'connected'}>Send Transaction</button
-	>
-	<button
-		class="border px-2 py-1"
-		onclick={handleSignTransaction}
-		disabled={connectionStatus != 'connected'}>Sign Transaction</button
-	>
-</div>
+<div class="flex flex-col gap-4">
+	<div class="flex flex-col gap-2">
+		<div>Basic ops</div>
+		<div>
+			<button
+				class="border px-2 py-1"
+				onclick={handleDisconnect}
+				disabled={connectionStatus != 'connected'}>Disconnect</button
+			>
+			<button
+				class="border px-2 py-1"
+				onclick={handleSignMessage}
+				disabled={connectionStatus != 'connected'}>Sign Msg</button
+			>
+			<button
+				class="border px-2 py-1"
+				onclick={handleSendTransaction}
+				disabled={connectionStatus != 'connected'}>Send Transaction</button
+			>
+			<button
+				class="border px-2 py-1"
+				onclick={handleSignTransaction}
+				disabled={connectionStatus != 'connected'}>Sign Transaction</button
+			>
+		</div>
+	</div>
 
-<div class="">
-	Active wallet:
-	{#if currentWallet === undefined}
-		None
-	{:else}
-		{currentWallet.name}
-	{/if}
-</div>
+	<div class="flex flex-col gap-2">
+		<div>MPL Core</div>
+		<div class="flex gap-2">
+			<span>Product key </span><input bind:value={prodKey} type="text" class="border px-2" />
+		</div>
+		<div class="flex gap-2">
+			<span>Token # </span><input bind:value={tokenNum} type="number" class="border px-2" />
+		</div>
+		<div class="flex gap-2">
+			<span>Collection Addr </span><input
+				bind:value={collectionAddr}
+				type="text"
+				class="border px-2"
+			/>
+		</div>
 
-<div class="flex gap-2">
-	<div>Select a wallet to connect</div>
-	<div>
-		{#each adapters as adapter}
-			<div>
-				<button onclick={handleConnectWallet} data-name={adapter.name}>
+		<div class="flex gap-2">
+			<button class="border px-2 py-1" onclick={handleTestData}>Test data</button>
+			<button
+				class="border px-2 py-1"
+				onclick={handleCreateCollection}
+				disabled={connectionStatus != 'connected'}>Create collection</button
+			>
+			<button
+				class="border px-2 py-1"
+				onclick={handleCreateToken}
+				disabled={connectionStatus != 'connected'}>Create token</button
+			>
+		</div>
+	</div>
+
+	<div class="">
+		Active wallet:
+		{#if currentWallet === undefined}
+			None
+		{:else}
+			{currentWallet.name}
+		{/if}
+	</div>
+
+	<div class="flex gap-2">
+		<div>Select a wallet to connect</div>
+		<div class="flex gap-2">
+			{#each adapters as adapter}
+				<button class="border px-2 py-1" onclick={handleConnectWallet} data-name={adapter.name}>
 					{adapter.name}
 				</button>
-			</div>
-		{/each}
+			{/each}
+		</div>
 	</div>
 </div>
