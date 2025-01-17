@@ -4,24 +4,20 @@
 		Adapter,
 		MessageSignerWalletAdapterProps,
 		SignerWalletAdapterProps,
-		SignInMessageSignerWalletAdapterProps,
 		WalletAdapterProps,
 		WalletError,
 		WalletName
 	} from '@solana/wallet-adapter-base';
 	import {
-		BaseSignInMessageSignerWalletAdapter,
 		WalletAdapterNetwork,
 		WalletNotConnectedError,
 		WalletNotReadyError,
 		WalletReadyState,
 		isWalletAdapterCompatibleStandardWallet
 	} from '@solana/wallet-adapter-base';
-	import { UnsafeBurnerWalletAdapter } from '@solana/wallet-adapter-wallets';
 	import {
 		clusterApiUrl,
 		Connection,
-		type ConnectionConfig,
 		PublicKey,
 		Transaction,
 		TransactionInstruction,
@@ -41,7 +37,7 @@
 	let currentWallet: Adapter | undefined = undefined;
 	let currentPublicKey: PublicKey | undefined = undefined;
 
-	async function connectWallet(evt: Event) {
+	async function handleConnectWallet(evt: Event) {
 		const el = evt.target as HTMLElement;
 		const name = el.dataset.name ?? '';
 
@@ -111,6 +107,7 @@
 		console.log('Signature', sigStr);
 	}
 
+  // This will send a legacy type transaction
 	async function handleSendTransaction() {
 		if (connectionStatus != 'connected' || !currentWallet || !currentPublicKey) {
 			console.error('Wallet not connected');
@@ -145,6 +142,52 @@
 			console.error('Transaction failed', err, signature);
 		}
 	}
+
+  // Not sure what is the purpose of this. Offline signing? Hardware device?
+  // https://solana.stackexchange.com/a/548
+  async function handleSignTransaction() {
+		if (connectionStatus != 'connected' || !currentWallet || !currentPublicKey) {
+			console.error('Wallet not connected');
+			return;
+		}
+
+		try {
+			const {
+				context: { slot: minContextSlot },
+				value: { blockhash, lastValidBlockHeight }
+			} = await connection.getLatestBlockhashAndContext();
+
+			const transaction = new Transaction({
+				feePayer: currentPublicKey,
+				blockhash,
+				lastValidBlockHeight
+			}).add(
+				new TransactionInstruction({
+					data: Buffer.from('Hello'),
+					keys: [],
+					programId: new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr')
+				})
+			);
+
+			const transaction2 = await signTransaction(transaction);
+      if (!transaction2.signature) {
+        console.error('Transaction was not signed');
+        return;
+      }
+
+      const sig = bs58.encode(transaction2.signature);
+
+			console.log('Transaction signed', sig);
+
+      if (!transaction2.verifySignatures()) {
+        console.error('Invalid transaction signature', sig);
+      } else {
+        console.log('Transaction signature is valid', sig);
+      }
+		} catch (err) {
+			console.error('Transaction sign failed', err);
+		}
+  }
 
 	const sendTransaction: WalletAdapterProps['sendTransaction'] = async (
 		transaction,
@@ -183,7 +226,7 @@
 
 	onMount(() => {
 		connection = new Connection(endpoint);
-    
+
 		// This is the first entry point, call the function below to get an object which contains a function to get all available wallets.
 		// Very weird API design.
 		const walletGetter = getWallets();
@@ -226,6 +269,7 @@
 			});
 
 			ad.on('error', (err) => {
+        // Somehow wallet disconnecting can trigger an error? WalletDisconnectedError
 				console.error(ad.name, err);
 			});
 		}
@@ -248,6 +292,11 @@
 		onclick={handleSendTransaction}
 		disabled={connectionStatus != 'connected'}>Send Transaction</button
 	>
+	<button
+		class="border px-2 py-1"
+		onclick={handleSignTransaction}
+		disabled={connectionStatus != 'connected'}>Sign Transaction</button
+	>
 </div>
 
 <div class="">
@@ -264,7 +313,7 @@
 	<div>
 		{#each adapters as adapter}
 			<div>
-				<button onclick={connectWallet} data-name={adapter.name}>
+				<button onclick={handleConnectWallet} data-name={adapter.name}>
 					{adapter.name}
 				</button>
 			</div>
