@@ -55,30 +55,39 @@
 	let currentWallet: Adapter | undefined = undefined;
 	let currentPublicKey: PublicKey | undefined = undefined;
 
-	let prodKey = '';
+	let prodKey = 'athena';
+	let collectionData: ProdData | undefined = undefined;
 	let prodData: ProdData | undefined = undefined;
-	let tokenNum = '';
 	let collectionAddr = '';
+	let tokenNum = '';
 
-	async function handleTestData() {
+	// use -1 for collection data.
+	async function fetchData(tokenId: number) {
 		const trimed = prodKey.trim();
 		if (trimed == '') {
 			console.error('missing prod key');
 			return;
 		}
 
-		const resp = await fetch(`https://member.auroriaverse.com/products/${prodKey}/1`, {
+		const tokenIdStr = tokenId == -1 ? 'info.json' : tokenId;
+		const resp = await fetch(`https://member.auroriaverse.com/products/${prodKey}/${tokenIdStr}`, {
 			method: 'GET',
 			headers: {
 				'Content-Type': 'application/json'
 			}
 		});
-		const prodJsonStr = await resp.text();
-		const prodJson = JSON.parse(prodJsonStr);
 
-		console.log('product data', prodJson);
+		const jsonStr = await resp.text();
+		const data = JSON.parse(jsonStr);
 
-		prodData = prodJson as ProdData;
+		console.log('fetched product data', data);
+
+		return data;
+	}
+
+	async function handleGetCollectionData() {
+		const data = await fetchData(-1);
+		collectionData = data as ProdData;
 	}
 
 	async function handleCreateCollection() {
@@ -91,7 +100,11 @@
 			throw new Error('Wallet missing publickey');
 		}
 
-		if (!prodData) {
+		if (!collectionData) {
+			await handleGetCollectionData();
+		}
+
+		if (!collectionData) {
 			console.error('missing product data');
 			return;
 		}
@@ -101,7 +114,7 @@
 
 		const builder = createCollection(umi, {
 			collection: signer,
-			name: `${prodData.brand} ${prodData.productName}`,
+			name: `${collectionData.brand} ${collectionData.productName}`,
 			uri: `https://member.auroriaverse.com/products/${prodKey}/info.json`,
 			plugins: [
 				{
@@ -133,25 +146,45 @@
 			return;
 		}
 
-		if (!prodData) {
+		if (!collectionData) {
+			await handleGetCollectionData();
+		}
+
+		if (!collectionData) {
 			console.error('missing product data');
 			return;
 		}
+
+		const data = await fetchData(parseInt(tokenNum));
+		prodData = data as ProdData;
+
+		if (!collectionData || !prodData) {
+			console.error('missing collection/product data');
+			return;
+		}
+
+		debugger;
+		// return;
 
 		const umi = customCreateUmi(connection, currentWallet);
 		const signer = generateSigner(umi);
 		const collection = await fetchCollection(umi, collectionAddr);
 
+		// TODO: incorrect name
 		const builder = create(umi, {
 			asset: signer,
 			collection,
-			name: `${prodData.name}`,
+			name: `${collectionData.name}`,
 			uri: `https://member.auroriaverse.com/products/${prodKey}/${tokenNum}`
 		});
 
 		const { signature, result } = await builder.sendAndConfirm(umi);
+		const sig = bs58.encode(signature);
 
-		console.log('create asset result', signature, result);
+		// NOTE: bs58 encode will result in a string that can be used to find the transaction in solscan/explorer.
+		console.log('create asset result', sig, result);
+
+		collectionAddr = sig;
 	}
 
 	async function handleConnectWallet(evt: Event) {
@@ -159,7 +192,7 @@
 		const name = el.dataset.name ?? '';
 
 		if (name == '') {
-			console.warn('invalid wallet button');
+			console.error('invalid wallet button');
 			return;
 		}
 
@@ -437,7 +470,8 @@
 		</div>
 
 		<div class="flex gap-2">
-			<button class="border px-2 py-1" onclick={handleTestData}>Test data</button>
+			<button class="border px-2 py-1" onclick={handleGetCollectionData}>Get collection data</button
+			>
 			<button
 				class="border px-2 py-1"
 				onclick={handleCreateCollection}
