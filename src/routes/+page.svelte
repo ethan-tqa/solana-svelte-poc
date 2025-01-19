@@ -55,7 +55,7 @@
 	let currentWallet: Adapter | undefined = undefined;
 	let currentPublicKey: PublicKey | undefined = undefined;
 
-	let prodKey = 'athena';
+	let prodKey = 'ksng_eclatdiamante';
 	let collectionData: ProdData | undefined = undefined;
 	let prodData: ProdData | undefined = undefined;
 	let collectionAddr = '';
@@ -114,7 +114,7 @@
 
 		const builder = createCollection(umi, {
 			collection: signer,
-			name: `${collectionData.brand} ${collectionData.productName}`,
+			name: `${collectionData.name}`,
 			uri: `https://member.auroriaverse.com/products/${prodKey}/info.json`,
 			plugins: [
 				{
@@ -138,6 +138,12 @@
 		const { signature, result } = await builder.sendAndConfirm(umi);
 
 		console.log('createCollection result', signature, result);
+		const sig = bs58.encode(signature);
+
+		// NOTE: bs58 encode will result in a string that can be used to find the transaction in solscan/explorer.
+		console.log('create asset result', sig, result);
+
+		collectionAddr = sig;
 	}
 
 	async function handleCreateToken() {
@@ -163,9 +169,6 @@
 			return;
 		}
 
-		debugger;
-		// return;
-
 		const umi = customCreateUmi(connection, currentWallet);
 		const signer = generateSigner(umi);
 		const collection = await fetchCollection(umi, collectionAddr);
@@ -183,8 +186,6 @@
 
 		// NOTE: bs58 encode will result in a string that can be used to find the transaction in solscan/explorer.
 		console.log('create asset result', sig, result);
-
-		collectionAddr = sig;
 	}
 
 	async function handleConnectWallet(evt: Event) {
