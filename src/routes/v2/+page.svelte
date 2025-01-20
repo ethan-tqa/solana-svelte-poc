@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { PUBLIC_SOL_WALLET_ADDR } from '$env/static/public';
 	import type {
 		Adapter,
 		MessageSignerWalletAdapterProps,
 		SignerWalletAdapterProps,
-		WalletAdapterProps	} from '@solana/wallet-adapter-base';
+		WalletAdapterProps
+	} from '@solana/wallet-adapter-base';
 	import {
 		WalletAdapterNetwork,
 		WalletReadyState,
@@ -16,6 +18,8 @@
 		PublicKey,
 		Transaction,
 		TransactionInstruction,
+		SystemProgram,
+		LAMPORTS_PER_SOL,
 		type TransactionSignature
 	} from '@solana/web3.js';
 	import { getWallets } from '@wallet-standard/app';
@@ -32,7 +36,7 @@
 	let currentWallet: Adapter | undefined = undefined;
 
 	let prodKey = 'ksng_acidlush';
-	let collectionAddr = '';
+	let collectionAddr = '8C4DGAqxRiqfooNDRmZGoWkTJT6LvVjoGGptyDAcGBce';
 	let tokenNum = '';
 
 	async function handleCreateCollection() {
@@ -44,23 +48,23 @@
 		if (!currentWallet.publicKey) {
 			throw new Error('Wallet missing publickey');
 		}
-		
+
 		const tx = await fetch('/v2', {
-			method: 'post', 
+			method: 'post',
 			headers: {
-				'content-type': 'application/json',
+				'content-type': 'application/json'
 			},
 			body: JSON.stringify({
 				create: 'collection',
-				prodKey,
-			}),
+				prodKey
+			})
 		});
 
 		console.log('handleCreateCollection tx', tx);
 	}
 
 	async function handleCreateToken() {
-		if (!currentWallet || connectionStatus != 'connected') {
+		if (!currentWallet || !currentWallet.publicKey || connectionStatus != 'connected') {
 			console.error('No wallet connected');
 			return;
 		}
@@ -73,17 +77,61 @@
 			throw new Error('invalid token num');
 		}
 
+		let transferSignature = '';
+
+		// First transfer the appropriate amount of SOL to the minter wallet.
+		try {
+			// metaplex toolbox does offer a more convenient function: https://developers.metaplex.com/umi/toolbox/transfer-sol
+			const {
+				context: { slot: minContextSlot },
+				value: { blockhash, lastValidBlockHeight }
+			} = await connection.getLatestBlockhashAndContext();
+
+			const transferTransaction = new Transaction({
+				feePayer: currentWallet.publicKey,
+				blockhash,
+				lastValidBlockHeight
+			}).add(
+				SystemProgram.transfer({
+					fromPubkey: currentWallet.publicKey,
+					toPubkey: new PublicKey(PUBLIC_SOL_WALLET_ADDR),
+					lamports: 0.1 * LAMPORTS_PER_SOL
+				})
+			);
+
+			// This tx signature shall be sent to the server for verification.
+			transferSignature = await sendTransaction(transferTransaction, connection, {
+				minContextSlot
+			});
+			console.log('SOL transfer sent', transferSignature);
+
+			const result = await connection.confirmTransaction(
+				{
+					blockhash,
+					lastValidBlockHeight,
+					signature: transferSignature
+				},
+				'finalized'
+			);
+			console.log('SOL transfer successful', result);
+		} catch (err) {
+			console.error('SOL transfer failed', err);
+			return;
+		}
+
+		// Then request the server to mint the token and transfer (both in one step)
 		const tx = await fetch('/v2', {
-			method: 'post', 
+			method: 'post',
 			headers: {
-				'content-type': 'application/json',
+				'content-type': 'application/json'
 			},
 			body: JSON.stringify({
 				create: 'token',
 				prodKey,
 				collectionAddr,
-				tokenNum
-			}),
+				tokenNum,
+				transferSignature
+			})
 		});
 
 		console.log('handleCreateCollection tx', tx);
