@@ -4,9 +4,14 @@
 		Adapter,
 		MessageSignerWalletAdapterProps,
 		SignerWalletAdapterProps,
-		WalletAdapterProps	} from '@solana/wallet-adapter-base';
+		WalletAdapterProps,
+		WalletError,
+		WalletName
+	} from '@solana/wallet-adapter-base';
 	import {
 		WalletAdapterNetwork,
+		WalletNotConnectedError,
+		WalletNotReadyError,
 		WalletReadyState,
 		isWalletAdapterCompatibleStandardWallet
 	} from '@solana/wallet-adapter-base';
@@ -22,7 +27,24 @@
 	import { StandardWalletAdapter } from '@solana/wallet-standard-wallet-adapter-base';
 	import { ed25519 } from '@noble/curves/ed25519';
 	import bs58 from 'bs58';
-	
+	import {
+		createCollection,
+		create,
+		ruleSet,
+		fetchCollection
+	} from '@metaplex-foundation/mpl-core';
+	import { customCreateUmi, customCreateUmiKeypair } from '$lib/umi';
+
+	type ProdData = {
+		name: string;
+		productName: string;
+		brand: string;
+		description: string;
+		external_url: string;
+		image: string;
+		attributes: string[];
+	};
+
 	const network = WalletAdapterNetwork.Devnet;
 	const endpoint = clusterApiUrl(network);
 	let connection: Connection;
@@ -31,6 +53,137 @@
 	let connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'disconnecting';
 	let currentWallet: Adapter | undefined = undefined;
 	let currentPublicKey: PublicKey | undefined = undefined;
+
+	let prodKey = 'ksng_eclatdiamante';
+	let collectionData: ProdData | undefined = undefined;
+	let prodData: ProdData | undefined = undefined;
+	let collectionAddr = '';
+	let tokenNum = '';
+
+	// use -1 for collection data.
+	async function fetchData(tokenId: number) {
+		const trimed = prodKey.trim();
+		if (trimed == '') {
+			console.error('missing prod key');
+			return;
+		}
+
+		const tokenIdStr = tokenId == -1 ? 'info.json' : tokenId;
+		const resp = await fetch(`https://member.auroriaverse.com/products/${prodKey}/${tokenIdStr}`, {
+			method: 'GET',
+			headers: {
+				'Content-Type': 'application/json'
+			}
+		});
+
+		const jsonStr = await resp.text();
+		const data = JSON.parse(jsonStr);
+
+		console.log('fetched product data', data);
+
+		return data;
+	}
+
+	async function handleGetCollectionData() {
+		const data = await fetchData(-1);
+		collectionData = data as ProdData;
+	}
+
+	async function handleCreateCollection() {
+		if (!currentWallet || connectionStatus != 'connected') {
+			console.error('No wallet connected');
+			return;
+		}
+
+		if (!currentWallet.publicKey) {
+			throw new Error('Wallet missing publickey');
+		}
+
+		if (!collectionData) {
+			await handleGetCollectionData();
+		}
+
+		if (!collectionData) {
+			console.error('missing product data');
+			return;
+		}
+
+		const { umi, signer } = customCreateUmi(connection, currentWallet);
+
+		const builder = createCollection(umi, {
+			collection: signer, // yes, pass the signer in the asset field.
+			name: `${collectionData.name}`,
+			uri: `https://member.auroriaverse.com/products/${prodKey}/info.json`,
+			plugins: [
+				{
+					type: 'VerifiedCreators',
+					signatures: [
+						{
+							address: umi.identity.publicKey,
+							verified: true
+						}
+					]
+				},
+				{
+					type: 'Royalties',
+					basisPoints: 100,
+					creators: [{ address: umi.identity.publicKey, percentage: 100 }],
+					ruleSet: ruleSet('None')
+				}
+			]
+		});
+
+		const { signature, result } = await builder.sendAndConfirm(umi);
+
+		console.log('createCollection result', signature, result);
+		const sig = bs58.encode(signature);
+
+		// NOTE: bs58 encode will result in a string that can be used to find the transaction in solscan/explorer.
+		console.log('create asset result', sig, result);
+
+		collectionAddr = sig;
+	}
+
+	async function handleCreateToken() {
+		if (!currentWallet || connectionStatus != 'connected') {
+			console.error('No wallet connected');
+			return;
+		}
+
+		if (!collectionData) {
+			await handleGetCollectionData();
+		}
+
+		if (!collectionData) {
+			console.error('missing product data');
+			return;
+		}
+
+		const data = await fetchData(parseInt(tokenNum));
+		prodData = data as ProdData;
+
+		if (!collectionData || !prodData) {
+			console.error('missing collection/product data');
+			return;
+		}
+
+		const {umi, signer} = customCreateUmi(connection, currentWallet);
+
+		const collection = await fetchCollection(umi, collectionAddr);
+
+		const builder = create(umi, {
+			asset: signer, // yes, pass the signer in the asset field.
+			collection,
+			name: `${collectionData.name}`,
+			uri: `https://member.auroriaverse.com/products/${prodKey}/${tokenNum}`
+		});
+
+		const { signature, result } = await builder.sendAndConfirm(umi);
+		const sig = bs58.encode(signature);
+
+		// NOTE: bs58 encode will result in a string that can be used to find the transaction in solscan/explorer.
+		console.log('create asset result', sig, result);
+	}
 
 	async function handleConnectWallet(evt: Event) {
 		const el = evt.target as HTMLElement;
@@ -294,6 +447,38 @@
 				class="border px-2 py-1"
 				onclick={handleSignTransaction}
 				disabled={connectionStatus != 'connected'}>Sign Transaction</button
+			>
+		</div>
+	</div>
+
+	<div class="flex flex-col gap-2">
+		<div>MPL Core</div>
+		<div class="flex gap-2">
+			<span>Product key </span><input bind:value={prodKey} type="text" class="border px-2" />
+		</div>
+		<div class="flex gap-2">
+			<span>Token # </span><input bind:value={tokenNum} type="number" class="border px-2" />
+		</div>
+		<div class="flex gap-2">
+			<span>Collection Addr </span><input
+				bind:value={collectionAddr}
+				type="text"
+				class="border px-2"
+			/>
+		</div>
+
+		<div class="flex gap-2">
+			<button class="border px-2 py-1" onclick={handleGetCollectionData}>Get collection data</button
+			>
+			<button
+				class="border px-2 py-1"
+				onclick={handleCreateCollection}
+				disabled={connectionStatus != 'connected'}>Create collection</button
+			>
+			<button
+				class="border px-2 py-1"
+				onclick={handleCreateToken}
+				disabled={connectionStatus != 'connected'}>Create token</button
 			>
 		</div>
 	</div>
